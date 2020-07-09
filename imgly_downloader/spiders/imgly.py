@@ -1,0 +1,51 @@
+# -*- coding: utf-8 -*-
+import os
+import scrapy
+import requests
+
+class ImglySpider(scrapy.Spider):
+    name = "imgly"
+    allowed_domains = ["img.ly/images"]
+    start_urls = ['http://img.ly/images/']
+
+    def start_requests(self):
+        screen_name = getattr(self, 'screen_name', None)
+        if screen_name is not None:
+            img_dir = 'img_' + screen_name
+            if not os.path.exists(img_dir):
+                os.makedirs(img_dir)
+            
+            url = self.start_urls[0] + screen_name
+            yield scrapy.Request(url, callback=self.parse, dont_filter=True, meta=dict(img_dir=img_dir))
+
+    def parse(self, response):
+        for url in response.css('#image-list-detailed a::attr(href)').extract():
+            url = response.urljoin(url)
+            yield scrapy.Request(url, callback=self.parse_detail_page, dont_filter=True, meta=response.meta)
+
+        next_page = response.css('a.next_page::attr(href)').extract_first()
+        if next_page is not None:
+            next_page = response.urljoin(next_page)
+            yield scrapy.Request(next_page, callback=self.parse, dont_filter=True, meta=response.meta)
+
+    def parse_detail_page(self, response):
+        img_url = response.css('img#the-image::attr(src)').extract_first() \
+                  .replace('large_', 'original_')
+        description = response.css('p#image-description::text').extract_first().strip()
+        
+        filepath = self.download_image(response.meta['img_dir'], img_url, description)
+        
+        yield {
+            'img_url': img_url,
+            'description': description,
+            'filepath': filepath,
+        }
+
+    def download_image(self, img_dir, img_url, description):
+        filename = description + os.path.splitext(img_url)[1]
+        filepath = os.path.join(img_dir, filename)
+        if not os.path.exists(filepath):
+            r = requests.get(img_url)
+            with open(filepath, 'wb') as f:
+                f.write(r.content)
+        return filepath
